@@ -1,0 +1,3 @@
+This project was born out of frustration with how google music does not allow you to easily syncronize your music library between it's cloud copy and your local copy. I specifically wrote this program to remove music I had thumbed down from both my local computer and from the google cloud.
+
+This code is built on the Unoffical Google Music API (https://github.com/odiroot/Unofficial-Google-Music-API).
