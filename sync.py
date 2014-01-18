@@ -3,21 +3,38 @@ import os
 import time
 import re
 
-def get_songs():
-    music= gmusicapi.api.Api()
-    music.login("youremail@gmail.com", "password")
+def get_songs(user, password):
+    music = gmusicapi.Webclient()
+    music.login(user, password)
     songs = music.get_all_songs()
-    fh = open("bad_songs.txt", "a")
+    return songs
+
+def get_good_songs(songs):
+    goodsongs = []
+    for song in songs:
+        if(song["rating"]==5):
+            goodsongs.append({"name":song["name"].encode('ascii', 'ignore'), "artist":song["artist"].encode('ascii', 'ignore')})
+    return goodsongs
+
+def get_bad_songs(songs):
+    fh_bad = open("bad_songs.txt", "a")
     badsongs = []
     for song in songs:
         if(song["rating"]==1):
-            fh.write(song["name"].encode('ascii', 'ignore')+"::"+song["artist"].encode('ascii', 'ignore')+"\n")
+            fh_bad.write(song["name"].encode('ascii', 'ignore')+"::"+song["artist"].encode('ascii', 'ignore')+"\n")
             badsongs.append({"name":song["name"].encode('ascii', 'ignore'), "artist":song["artist"].encode('ascii', 'ignore')})
             music.delete_songs(song["id"])
-    fh.close()
+    fh_bad.close()
     return badsongs
 
-#This works, but it's more effective to build a tree and search that for deleted multiple songs.
+def delete_bad_songs(songs):
+    for song in songs:
+        if(song["rating"]==1):
+            music.delete_songs(song["id"])
+    return
+
+
+#This works, but it's more effective to build a tree and search that for deleting multiple songs.
 def find_song_by_disk(search, path):
 	files = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
 	folders = [os.path.join(path,f) for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
@@ -71,6 +88,14 @@ class treeBranch():
             if(len(ret)!=0):
                 finds.extend(ret)
         return finds
+    def song_exists(self, search):
+        for phile in self.files:
+            if(len(re.findall(".*"+search+".*", phile))!=0):
+                return True
+        ret = False
+        for folder in self.children:
+            ret = ret or folder.song_exists(search)
+        return ret
 
 class tree():
     def __init__(self):
@@ -86,20 +111,31 @@ class tree():
         size = t.addChild(path)
         self.size += size
         self.root.append(t)
+    def song_exists(self, search):
+        ret = False
+        for branch in self.root:
+            ret = ret or branch.song_exists(search)
+        return ret
 
 
 print "Beginning program"
-print "Getting music from google"
-bad = get_songs()
+
 print "Building tree"
 start = time.clock()
 trie = build_tree()
 print "Done building"
 print "Time taken", time.clock()-start
 print "Size is: ", trie.size
+
+print "Getting music from google"
+songs = get_songs("username@gmail.com", "password")
+good_songs = get_good_songs(songs)
+bad_songs = get_bad_songs(songs)
+delete_bad_songs(songs)
+
 print "Now attempting to find",
 results = []
-for song in bad:
+for song in bad_songs:
     if(len(song["name"]) > 3):
         print "Now attempting to find", song["name"]
         try:  
