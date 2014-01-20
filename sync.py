@@ -2,12 +2,7 @@ import gmusicapi
 import os
 import time
 import re
-
-def get_songs(user, password):
-    music = gmusicapi.Webclient()
-    music.login(user, password)
-    songs = music.get_all_songs()
-    return songs
+from mutagen.id3 import ID3, POPM
 
 def get_good_songs(songs):
     goodsongs = []
@@ -22,134 +17,169 @@ def get_bad_songs(songs):
     for song in songs:
         if(song["rating"]==1):
             fh_bad.write(song["name"].encode('ascii', 'ignore')+"::"+song["artist"].encode('ascii', 'ignore')+"\n")
-            badsongs.append({"name":song["name"].encode('ascii', 'ignore'), "artist":song["artist"].encode('ascii', 'ignore')})
-            music.delete_songs(song["id"])
+            song["name"] = song["name"].encode('ascii', 'ignore')
+            song["artist"] = song["artist"].encode('ascii', 'ignore')
+            badsongs.append(song)
     fh_bad.close()
     return badsongs
 
-def delete_bad_songs(songs):
+def delete_bad_songs(bad_songs, google_music): 
+    google_music.delete_songs([song['id'] for song in bad_songs])
+
+def set_local_rating_fivestars(songfile):
+    audio = ID3()
+    audio.load(songfile, translate= False, v2_version=3)
+    frame = POPM(email="Windows Media Player 9 Series", rating=255)
+    audio.add(frame)
+    audio.save(songfile, v1=1, v2_version=3)
+
+def set_remote_rating_thumbup(google_music, songs):
     for song in songs:
-        if(song["rating"]==1):
-            music.delete_songs(song["id"])
-    return
+        song['rating'] = 5
+    google_music.change_song_metadata(songs)
 
+def get_local_info(song_info):
+    song_info['rating'] = -1
+    song_info['title'] = song_info['filename']
+    song_info['artist'] = ''
+    if(song_info['type'] == 'mp3'):
+        try:
+            audio = ID3(song_info['path'])
+            rate_temp = audio.getall('POPM')
+            if(len(rate_temp) >= 1):
+                song_info['rating'] = rate_temp[0].rating
+            song_info['title'] = audio.get('TIT2').text[0]
+            song_info['artist'] = audio.get('TPE1').text[0]
+        except:
+            return
+    else:
+        return
 
-#This works, but it's more effective to build a tree and search that for deleting multiple songs.
-def find_song_by_disk(search, path):
-	files = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
-	folders = [os.path.join(path,f) for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
-	finds = []
-	for phile in files:
-		if(len(re.findall(".*"+search+".*", phile))!=0):
-			finds.append(os.path.join(path, phile))
-	for folder in folders:
-		ret = find_song(search, folder)
-		if(len(ret) !=0):
-			finds.extend(ret)
-	return finds
+def get_remote_info(google_music_dict, song_info):
+    if (song_info['title'], song_info['artist']) in google_music_dict:
+        return google_music_dict[(song_info['title'], song_info['artist'])]
+    else:
+        return {}
 
-def build_tree():
-    t = tree()
-    t.add_branch("C:\\.D\\Music")
-    t.add_branch("C:\\Users\\Rand\\Desktop")
-    t.add_branch("C:\\Users\\Rand\\Downloads")
-    t.add_branch("C:\\Users\\Rand\\Music")
+def build_dict():
+    t = MusicDict()
+    t.add_folder("C:\\.D\\Music")
+    #t.add_folder("C:\\Users\\Random\\Desktop")
+    #t.add_folder("C:\\Users\\Random\\Downloads")
+    #t.add_folder("C:\\Users\\Random\\Music")
     return t
 
 
-class treeBranch():
-    def __init__(self, name):
-        self.children = []
-        self.files = []
-        self.name = name
-        self.path = ""
-    def addChild(self, path):
-        full_size = 0
-        self.path = path
+# songs: (title, artist) = [rating, path, title, artist]
+class MusicDict():
+    def __init__(self):
+        self.songs = {}
+        self.size= 0
+        
+    def find_song(self, title, artist=''):
+        if (title, artist) in self.songs:
+            return self.songs[(title, artist)]
+        return {}
+        
+    def add_folder(self, path):
         files = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
         folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
         for phile in files:
             if(len(re.findall(".*(mp3|wav|mp4)+", phile)) != 0):
-                self.files.append(phile)
-                full_size+=1
+                file_info = {'path': os.path.join(path, phile), 'filename': phile}
+                if('wav' in phile):
+                    file_info['type'] = 'wav'
+                if('mp4' in phile):
+                    file_info['type'] = 'mp4'
+                if('mp3' in phile):
+                    file_info['type'] = 'mp3'
+                get_local_info(file_info)
+                self.songs[(file_info['title'], file_info['artist'])] = file_info
+                self.size+=1
+                if(self.size % 1000 == 0):
+                    print self.size, " songs found"
         for folder in folders:
-            t = treeBranch(folder)
-            size = t.addChild(os.path.join(path, folder))
-            full_size+=size
-            self.children.append(t)
-        return full_size
-    def find_song(self, search):
-        finds = []
-        for phile in self.files:
-            if(len(re.findall(".*"+search+".*", phile))!=0):
-                finds.append(os.path.join(self.path, phile))
-        for folder in self.children:
-            ret = folder.find_song(search)
-            if(len(ret)!=0):
-                finds.extend(ret)
-        return finds
-    def song_exists(self, search):
-        for phile in self.files:
-            if(len(re.findall(".*"+search+".*", phile))!=0):
-                return True
-        ret = False
-        for folder in self.children:
-            ret = ret or folder.song_exists(search)
-        return ret
-
-class tree():
-    def __init__(self):
-        self.root = []
-        self.size= 0
-    def find_song(self, search):
-        ret = []
-        for branch in self.root:
-            ret.extend(branch.find_song(search))
-        return ret
-    def add_branch(self, path):
-        t = treeBranch(path)
-        size = t.addChild(path)
-        self.size += size
-        self.root.append(t)
-    def song_exists(self, search):
-        ret = False
-        for branch in self.root:
-            ret = ret or branch.song_exists(search)
-        return ret
+            self.add_folder(os.path.join(path, folder))
+            
+    def song_exists(self, title, artist=''):
+        return (title, artist) in self.songs
 
 
 print "Beginning program"
 
-print "Building tree"
+print "Building dictionary of songs on computer"
 start = time.clock()
-trie = build_tree()
+music_dict = build_dict()
 print "Done building"
 print "Time taken", time.clock()-start
-print "Size is: ", trie.size
+print "Songs found: ", music_dict.size
 
+start = time.clock()
 print "Getting music from google"
-songs = get_songs("username@gmail.com", "password")
-good_songs = get_good_songs(songs)
-bad_songs = get_bad_songs(songs)
-delete_bad_songs(songs)
+google_music = gmusicapi.Webclient()
+google_music.login("username@gmail.com", "password")
+google_songs = google_music.get_all_songs()
+google_songs_dict = {}
+print "Time taken", time.clock()-start
 
-print "Now attempting to find",
-results = []
+print 'Putting google songs in a dictionary'
+for song in google_songs:
+    google_songs_dict[(song["name"].encode('ascii', 'ignore'), song["artist"].encode('ascii', 'ignore'))] = song
+
+print 'Getting good songs from google'
+good_songs = get_good_songs(google_songs)
+print 'Getting bad songs from google'
+bad_songs = get_bad_songs(google_songs)
+
+print "Finding all songs rated up on google play and updating on computer."
+for song in good_songs:
+    if music_dict.song_exists(song["name"].encode('ascii', 'ignore'), song["artist"].encode('ascii', 'ignore')):
+        local_song = music_dict.find_song(song["name"].encode('ascii', 'ignore'), song["artist"].encode('ascii', 'ignore'))
+        try:
+            set_local_rating_fivestars(local_song['path'])
+            print song["name"].encode('ascii', 'ignore') + ' by '+ song["artist"].encode('ascii', 'ignore')+' was given 5 stars.'
+        except Exception as e:
+            print e
+
+print "Finding all songs rated up on computer and updating google play."
+google_music_songs = []
+for song_info in music_dict.songs.values():
+    if(song_info['rating'] == 255):
+        remote_song_info = get_remote_info(google_songs_dict, song_info)
+        if(remote_song_info != {}):
+            google_music_songs.append(remote_song_info)
+try:
+    set_remote_rating_thumbup(google_music, google_music_songs)
+except Exception as e:
+    print e
+
+print "Finding all songs that are rated down on google play on this computer."
 for song in bad_songs:
-    if(len(song["name"]) > 3):
-        print "Now attempting to find", song["name"]
-        try:  
-            results.extend(trie.find_song(song["name"]))
-        except:
-            print "Failed to get", song["name"]
+    if(music_dict.song_exists(song['name'], song['artist'])):
+        response = raw_input( "Do you want to delete "+ song['name']+ ' by '+ song['artist']+"? (y/n): ")
+        if(response=="n"):
+            print "Not deleted"
+        else:
+            song_info = music_dict.find_song(song['name'], song['artist'])
+            os.remove(song_info['path'])
     else:
-        print "Song name is too short"
+        print "Could not find ", song['name'], " by ", song['artist']
 
-for result in results:
-    response = raw_input( "Do you want to delete"+ result+"? (y/n): ")
-    if(response=="n"):
-        print "Not deleted"
-    else:
-        os.remove(result)
+print 'Deleting bad songs from google'
+delete_bad_songs(bad_songs, google_music)
+
+print "Removing music from google play that does not exist on computer."
+delete_songs = []
+for song in google_songs:
+    if song['rating']!= 5 and not music_dict.song_exists(song["name"].encode('ascii', 'ignore'), song["artist"].encode('ascii', 'ignore')):
+        print "Deleting "+song["name"].encode('ascii', 'ignore')+" by "+song["artist"].encode('ascii', 'ignore')+" remotely"
+        #response = raw_input("Do you want to delete this song? (y/n): ")
+        response = 'y'
+        if(response!="n"):
+                delete_songs.append(song["id"])
+try:
+    google_music.delete_songs(delete_songs)
+except Exception as e:
+    print e
 
 print "Completed"
